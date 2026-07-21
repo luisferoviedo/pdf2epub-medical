@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>pdf2epub</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 640px; margin: 4rem auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.4rem; }
+  #drop { border: 2px dashed #999; border-radius: 8px; padding: 3rem 1rem; text-align: center; color: #666; cursor: pointer; }
+  #drop.hover { border-color: #333; color: #333; }
+  .row { margin: 1rem 0; }
+  label { display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem; }
+  input[type=text], input[type=number] { width: 100%; box-sizing: border-box; padding: 0.4rem; }
+  progress { width: 100%; }
+  #status { font-size: 0.9rem; color: #444; margin-top: 0.5rem; }
+  a.download { display: inline-block; margin-top: 1rem; padding: 0.6rem 1.2rem; background: #222; color: #fff; text-decoration: none; border-radius: 6px; }
+  #error { color: #b00020; }
+</style>
+</head>
+<body>
+  <h1>pdf2epub</h1>
+  <p>Arrastra un PDF para convertirlo a EPUB.</p>
+
+  <div id="drop">Suelta el PDF aquí, o haz clic para elegir archivo</div>
+  <input type="file" id="fileInput" accept="application/pdf" style="display:none" />
+
+  <div class="row">
+    <label for="lang">Idiomas OCR</label>
+    <input type="text" id="lang" value="spa+eng+por" />
+  </div>
+  <div class="row">
+    <label for="maxImageSize">Lado máximo de imagen (px)</label>
+    <input type="number" id="maxImageSize" value="1600" />
+  </div>
+  <div class="row">
+    <label for="jpegQuality">Calidad JPEG</label>
+    <input type="number" id="jpegQuality" value="85" min="1" max="100" />
+  </div>
+
+  <div class="row" id="progressRow" style="display:none">
+    <progress id="progress" max="1" value="0"></progress>
+    <div id="status"></div>
+  </div>
+
+  <div id="error"></div>
+  <div id="result"></div>
+
+<script>
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('fileInput');
+const progressRow = document.getElementById('progressRow');
+const progressEl = document.getElementById('progress');
+const statusEl = document.getElementById('status');
+const errorEl = document.getElementById('error');
+const resultEl = document.getElementById('result');
+
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('hover'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('hover'));
+drop.addEventListener('drop', e => {
+  e.preventDefault();
+  drop.classList.remove('hover');
+  if (e.dataTransfer.files.length) startJob(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) startJob(fileInput.files[0]);
+});
+
+async function startJob(file) {
+  errorEl.textContent = '';
+  resultEl.innerHTML = '';
+  progressRow.style.display = 'block';
+  progressEl.removeAttribute('value');
+  statusEl.textContent = 'Subiendo...';
+
+  const form = new FormData();
+  form.append('file', file);
+  form.append('lang', document.getElementById('lang').value);
+  form.append('max_image_size', document.getElementById('maxImageSize').value);
+  form.append('jpeg_quality', document.getElementById('jpegQuality').value);
+
+  const res = await fetch('/jobs', { method: 'POST', body: form });
+  if (!res.ok) {
+    errorEl.textContent = 'Error al subir el archivo.';
+    return;
+  }
+  const { job_id } = await res.json();
+  poll(job_id);
+}
+
+async function poll(jobId) {
+  const res = await fetch(`/jobs/${jobId}`);
+  const job = await res.json();
+
+  if (job.status === 'error') {
+    errorEl.textContent = 'Error: ' + job.error;
+    progressRow.style.display = 'none';
+    return;
+  }
+
+  if (job.total) {
+    progressEl.max = job.total;
+    progressEl.value = job.current;
+  }
+  statusEl.textContent = `${job.stage} (${job.current}/${job.total || '?'})`;
+
+  if (job.status === 'done') {
+    progressRow.style.display = 'none';
+    resultEl.innerHTML = `<a class="download" href="/jobs/${jobId}/download">Descargar EPUB</a>`;
+    return;
+  }
+
+  setTimeout(() => poll(jobId), 1500);
+}
+</script>
+</body>
+</html>

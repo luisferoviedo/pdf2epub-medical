@@ -1,0 +1,37 @@
+[project]
+name = "pdf2epub"
+version = "0.1.0"
+description = "PDF to EPUB converter for large illustrated books (digital + scanned, OCR, multi-column, tables)"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "luisferoviedo", email = "ingluisferoviedo@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "pymupdf>=1.24",
+    "ebooklib>=0.18",
+    "pillow>=10.0",
+    "typer>=0.12",
+    "rich>=13.0",
+    "ocrmypdf>=16.0",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+pdf2epub = "pdf2epub.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.30,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
