@@ -1,5 +1,8 @@
 # pdf2epub-medical
 
+[![CI](https://github.com/luisferoviedo/pdf2epub-medical/actions/workflows/ci.yml/badge.svg)](https://github.com/luisferoviedo/pdf2epub-medical/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Convertidor de PDF a EPUB para libros grandes e ilustrados (manuales de
 medicina, 2500+ páginas, mezcla de páginas digitales y escaneadas). Uso
 personal, publicado por si le sirve a alguien más.
@@ -94,10 +97,14 @@ muchas ilustraciones sigue pesando demasiado, baja `--max-image-size` o
 
 ```bash
 uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src/
 ```
 
 Si tienes `epubcheck` instalado (`brew install epubcheck`), los tests
-también validan el EPUB generado contra el spec oficial.
+también validan el EPUB generado contra el spec oficial. Los cuatro
+comandos corren en CI (GitHub Actions) en cada push/PR.
 
 ## Licencia
 
