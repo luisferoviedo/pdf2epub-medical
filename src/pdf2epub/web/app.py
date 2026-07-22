@@ -134,7 +134,7 @@ def job_cancel(job_id: str) -> JSONResponse:
     return JSONResponse({"status": "cancelando"})
 
 
-@app.get("/jobs/{job_id}/download")
+@app.get("/jobs/{job_id}/download", response_model=None)
 def job_download(job_id: str) -> FileResponse | JSONResponse:
     with _jobs_lock:
         job = _jobs.get(job_id)
