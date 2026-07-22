@@ -18,8 +18,9 @@ def recompress(
     Images with an alpha channel are flattened onto white before encoding,
     since EPUB readers vary in transparency support and JPEG has none.
     """
-    with Image.open(io.BytesIO(data)) as img:
-        img.load()
+    with Image.open(io.BytesIO(data)) as opened:
+        opened.load()
+        img: Image.Image = opened
         if img.mode in ("RGBA", "LA", "P"):
             background = Image.new("RGB", img.size, (255, 255, 255))
             rgba = img.convert("RGBA")
@@ -32,7 +33,8 @@ def recompress(
         longest = max(width, height)
         if longest > max_side:
             scale = max_side / longest
-            img = img.resize((max(1, round(width * scale)), max(1, round(height * scale))), Image.LANCZOS)
+            new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
 
         out = io.BytesIO()
         img.save(out, format="JPEG", quality=jpeg_quality, optimize=True)

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ebooklib import epub
 
-from pdf2epub.models import ChapterContent, ImageBlock, TextBlock
+from pdf2epub.models import ChapterContent, ImageBlock, TableBlock, TextBlock
 
 DEFAULT_CSS = """
 body { font-family: serif; line-height: 1.4; margin: 1em; }
@@ -22,23 +22,30 @@ h1, h2 { line-height: 1.2; margin-top: 1.5em; }
 p { margin: 0 0 0.8em 0; text-align: justify; }
 img { max-width: 100%; height: auto; display: block; margin: 1em auto; }
 figcaption { font-size: 0.85em; text-align: center; color: #444; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+th, td { border: 1px solid #999; padding: 0.3em 0.5em; text-align: left; }
+th { background: #eee; }
 """
 
 
-def _item_to_fragment(item: TextBlock | ImageBlock) -> tuple[str, int]:
+def _item_to_fragment(item: TextBlock | ImageBlock | TableBlock) -> tuple[str, int]:
     if isinstance(item, TextBlock):
         text = html_lib.escape(item.text)
         tag = "h2" if item.kind == "heading" else "p"
         fragment = f"<{tag}>{text}</{tag}>\n"
+    elif isinstance(item, TableBlock):
+        fragment = item.html + "\n"
     else:
         ext = "jpg" if item.mime == "image/jpeg" else "png"
         fragment = f'<img src="images/{item.image_id}.{ext}" alt=""/>\n'
     return fragment, len(fragment.encode("utf-8"))
 
 
-def _split_fragments(items: list[TextBlock | ImageBlock], split_bytes: int) -> list[list[TextBlock | ImageBlock]]:
-    parts: list[list[TextBlock | ImageBlock]] = []
-    current: list[TextBlock | ImageBlock] = []
+def _split_fragments(
+    items: list[TextBlock | ImageBlock | TableBlock], split_bytes: int
+) -> list[list[TextBlock | ImageBlock | TableBlock]]:
+    parts: list[list[TextBlock | ImageBlock | TableBlock]] = []
+    current: list[TextBlock | ImageBlock | TableBlock] = []
     current_size = 0
     for item in items:
         _, size = _item_to_fragment(item)

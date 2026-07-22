@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import fitz
+from PIL import Image, ImageDraw, ImageFont
 
 
 def make_two_column_pdf(path: Path, pages: int = 3, with_toc: bool = True) -> None:
@@ -34,6 +36,42 @@ def make_scanned_pdf(path: Path, pages: int = 2) -> None:
         pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 400, 600))
         pix.set_rect(pix.irect, (255, 255, 255))
         page.insert_image(fitz.Rect(0, 0, 400, 600), pixmap=pix)
+    doc.save(path)
+    doc.close()
+
+
+def _ocr_friendly_font(size: int) -> ImageFont.ImageFont:
+    for candidate in (
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ):
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def make_mixed_scan_digital_pdf(path: Path, pattern: list[bool]) -> None:
+    """Builds a PDF where ``pattern[i]`` says whether page i is scanned (True,
+    a rasterized image with no text layer) or digital (False, real vector
+    text). Each page gets a unique marker string ("MARKER n").
+    """
+    doc = fitz.open()
+    font = _ocr_friendly_font(72)
+    for i, is_scanned in enumerate(pattern):
+        marker = f"MARKER {i}"
+        if is_scanned:
+            img = Image.new("RGB", (1600, 2000), "white")
+            draw = ImageDraw.Draw(img)
+            draw.text((100, 900), marker, fill="black", font=font)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            page = doc.new_page(width=400, height=500)
+            page.insert_image(fitz.Rect(0, 0, 400, 500), stream=buf.getvalue())
+        else:
+            page = doc.new_page(width=400, height=500)
+            page.insert_text((50, 50), marker, fontsize=16)
     doc.save(path)
     doc.close()
 

@@ -1,8 +1,10 @@
+from unittest.mock import patch
+
 import fitz
 
 from pdf2epub import extract
-from pdf2epub.models import Chapter, TextBlock
-from tests.fixtures import make_two_column_pdf
+from pdf2epub.models import Chapter, ImageBlock, TableBlock, TextBlock
+from tests.fixtures import make_mixed_scan_digital_pdf, make_two_column_pdf
 
 
 def test_two_column_reading_order_keeps_columns_intact(tmp_path):
@@ -12,9 +14,7 @@ def test_two_column_reading_order_keeps_columns_intact(tmp_path):
     doc = fitz.open(pdf_path)
     chapter = Chapter(title="Capitulo 1", start_page=0, end_page=1)
 
-    content = extract.extract_chapter_content(
-        doc, chapter, repeated_texts=set(), seen_image_hashes=set()
-    )
+    content = extract.extract_chapter_content(doc, chapter, repeated_texts=set(), seen_image_hashes=set())
 
     texts = [item.text for item in content.items if isinstance(item, TextBlock)]
     left_idx = next(i for i, t in enumerate(texts) if "Columna izquierda" in t)
@@ -40,8 +40,139 @@ def test_repeated_header_footer_is_excluded(tmp_path):
     assert "Manual de Medicina - Capitulo X" in repeated
 
     chapter = Chapter(title="C1", start_page=0, end_page=doc.page_count)
-    content = extract.extract_chapter_content(
-        doc, chapter, repeated_texts=repeated, seen_image_hashes=set()
-    )
+    content = extract.extract_chapter_content(doc, chapter, repeated_texts=repeated, seen_image_hashes=set())
     texts = [item.text for item in content.items if isinstance(item, TextBlock)]
     assert all("Manual de Medicina" not in t for t in texts)
+
+
+def test_repeated_header_with_embedded_page_number_is_excluded(tmp_path):
+    """A header like "Capitulo 3 - Pagina 45" changes on every page (the page
+    number), so exact-string matching never sees it repeat and it leaks into
+    every chapter. Digit-run normalization must still recognize the pattern."""
+    pdf_path = tmp_path / "book.pdf"
+    doc = fitz.open()
+    for i in range(6):
+        page = doc.new_page(width=400, height=600)
+        page.insert_text((50, 20), f"Capitulo 3 - Pagina {45 + i}", fontsize=8)
+        page.insert_textbox(fitz.Rect(30, 90, 370, 550), f"Contenido pagina {i}. " * 10, fontsize=9)
+    doc.save(pdf_path)
+    doc.close()
+
+    doc = fitz.open(pdf_path)
+    repeated = extract.detect_repeated_texts(doc, sample_every=1)
+    assert "Capitulo # - Pagina #" in repeated
+
+    chapter = Chapter(title="C1", start_page=0, end_page=doc.page_count)
+    content = extract.extract_chapter_content(doc, chapter, repeated_texts=repeated, seen_image_hashes=set())
+    texts = [item.text for item in content.items if isinstance(item, TextBlock)]
+    assert all("Pagina 4" not in t and "Pagina 5" not in t for t in texts)
+
+
+def test_find_tables_skipped_on_scanned_pages(tmp_path):
+    """A scanned page's "table" is just part of its one full-page raster
+    image — running the vector table-structure heuristic against it is
+    pure cost for zero benefit, so extract_chapter_content must not call it
+    on pages listed in scanned_pages."""
+    pdf_path = tmp_path / "mixed.pdf"
+    make_mixed_scan_digital_pdf(pdf_path, [False, True])  # page 0 digital, page 1 scanned
+
+    doc = fitz.open(pdf_path)
+    chapter = Chapter(title="C1", start_page=0, end_page=2)
+
+    original_find_tables = fitz.Page.find_tables
+    called_on_pages = []
+
+    def spy(self, *args, **kwargs):
+        called_on_pages.append(self.number)
+        return original_find_tables(self, *args, **kwargs)
+
+    with patch.object(fitz.Page, "find_tables", spy):
+        extract.extract_chapter_content(doc, chapter, repeated_texts=set(), seen_image_hashes=set(), scanned_pages={1})
+
+    assert called_on_pages == [0]
+
+
+def test_page_image_rects_computed_once_per_page(tmp_path):
+    """Regression test: xref lookup used to call get_images()/get_image_rects()
+    once per image block on the page, making extraction O(images^2) on
+    illustration-heavy pages. It must now scan the page's images exactly once."""
+    import io
+
+    from PIL import Image
+
+    pdf_path = tmp_path / "many_images.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=600, height=800)
+    for row in range(4):
+        for col in range(4):
+            img = Image.new("RGB", (20, 20), (row * 10, col * 10, 100))
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            x, y = 20 + col * 60, 20 + row * 60
+            page.insert_image(fitz.Rect(x, y, x + 40, y + 40), stream=buf.getvalue())
+    doc.save(pdf_path)
+    doc.close()
+
+    doc = fitz.open(pdf_path)
+    chapter = Chapter(title="C1", start_page=0, end_page=1)
+
+    original_get_images = fitz.Page.get_images
+    call_count = 0
+
+    def spy(self, *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original_get_images(self, *args, **kwargs)
+
+    with patch.object(fitz.Page, "get_images", spy):
+        content = extract.extract_chapter_content(doc, chapter, repeated_texts=set(), seen_image_hashes=set())
+
+    assert call_count == 1, f"get_images() called {call_count} times for 1 page — should be exactly 1"
+    n_images = sum(1 for item in content.items if not isinstance(item, TextBlock))
+    assert n_images == 16
+
+
+def _make_table_pdf(path):
+    doc = fitz.open()
+    page = doc.new_page(width=600, height=800)
+    page.insert_text((50, 30), "Tabla de dosis", fontsize=14)
+    rows = [["Medicamento", "Dosis"], ["Paracetamol", "10mg/kg"]]
+    y = 80
+    for row in rows:
+        x = 60
+        for cell in row:
+            page.draw_rect(fitz.Rect(x, y, x + 150, y + 30))
+            page.insert_text((x + 5, y + 20), cell, fontsize=10)
+            x += 150
+        y += 30
+    doc.save(path)
+    doc.close()
+
+
+def test_table_extracted_as_real_html(tmp_path):
+    pdf_path = tmp_path / "table.pdf"
+    _make_table_pdf(pdf_path)
+
+    doc = fitz.open(pdf_path)
+    chapter = Chapter(title="C1", start_page=0, end_page=1)
+    content = extract.extract_chapter_content(doc, chapter, repeated_texts=set(), seen_image_hashes=set())
+
+    table_blocks = [item for item in content.items if isinstance(item, TableBlock)]
+    assert len(table_blocks) == 1
+    assert "Paracetamol" in table_blocks[0].html
+    # No fallback image should be produced when the real table extraction succeeds.
+    assert not any(isinstance(item, ImageBlock) for item in content.items)
+
+
+def test_table_falls_back_to_image_when_model_unavailable(tmp_path):
+    pdf_path = tmp_path / "table.pdf"
+    _make_table_pdf(pdf_path)
+
+    doc = fitz.open(pdf_path)
+    chapter = Chapter(title="C1", start_page=0, end_page=1)
+
+    with patch("pdf2epub.extract.tables.extract_table_html", return_value=None):
+        content = extract.extract_chapter_content(doc, chapter, repeated_texts=set(), seen_image_hashes=set())
+
+    assert not any(isinstance(item, TableBlock) for item in content.items)
+    assert any(isinstance(item, ImageBlock) for item in content.items)

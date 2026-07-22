@@ -46,9 +46,12 @@ def chapters_from_font_heuristic(doc: fitz.Document, size_ratio: float = 1.2) ->
     sizes: list[float] = []
     headings: list[tuple[int, str, float]] = []  # (page_index, text, size)
 
+    # get_text("dict") is the expensive call here; cache each page's result
+    # instead of parsing every page twice (once for sizes, once for headings).
+    page_dicts: list[dict] = []
     for page_index in range(doc.page_count):
-        page = doc[page_index]
-        page_dict = page.get_text("dict")
+        page_dict = doc[page_index].get_text("dict")
+        page_dicts.append(page_dict)
         for block in page_dict.get("blocks", []):
             for line in block.get("lines", []):
                 for span in line.get("spans", []):
@@ -63,9 +66,7 @@ def chapters_from_font_heuristic(doc: fitz.Document, size_ratio: float = 1.2) ->
     body_size, _count = Counter(sizes).most_common(1)[0]
     cutoff = body_size * size_ratio
 
-    for page_index in range(doc.page_count):
-        page = doc[page_index]
-        page_dict = page.get_text("dict")
+    for page_index, page_dict in enumerate(page_dicts):
         for block in page_dict.get("blocks", []):
             for line in block.get("lines", []):
                 for span in line.get("spans", []):

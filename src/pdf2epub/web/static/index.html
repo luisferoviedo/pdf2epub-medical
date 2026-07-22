@@ -8,13 +8,33 @@
   h1 { font-size: 1.4rem; }
   #drop { border: 2px dashed #999; border-radius: 8px; padding: 3rem 1rem; text-align: center; color: #666; cursor: pointer; }
   #drop.hover { border-color: #333; color: #333; }
+  #drop.disabled { opacity: 0.5; cursor: not-allowed; }
   .row { margin: 1rem 0; }
   label { display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem; }
   input[type=text], input[type=number] { width: 100%; box-sizing: border-box; padding: 0.4rem; }
   progress { width: 100%; }
-  #status { font-size: 0.9rem; color: #444; margin-top: 0.5rem; }
+  #status { font-size: 0.9rem; color: #444; margin-top: 0.5rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
   a.download { display: inline-block; margin-top: 1rem; padding: 0.6rem 1.2rem; background: #222; color: #fff; text-decoration: none; border-radius: 6px; }
-  #error { color: #b00020; }
+  #error { color: #b00020; margin-top: 0.5rem; }
+  #error summary { cursor: pointer; font-size: 0.85rem; color: #555; margin-top: 0.3rem; }
+  #error pre { white-space: pre-wrap; background: #f6f6f6; padding: 0.5rem; border-radius: 4px; font-size: 0.75rem; max-height: 200px; overflow-y: auto; }
+  button.cancel { font-size: 0.8rem; padding: 0.25rem 0.6rem; border: 1px solid #b00020; color: #b00020; background: #fff; border-radius: 4px; cursor: pointer; }
+  button.cancel:hover { background: #fdeaea; }
+  #log {
+    display: none;
+    margin-top: 0.75rem;
+    height: 140px;
+    overflow-y: auto;
+    background: #1e1e1e;
+    color: #ddd;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    padding: 0.5rem 0.7rem;
+    border-radius: 6px;
+  }
+  #log div { white-space: pre-wrap; }
+  #log .t { color: #888; margin-right: 0.4rem; }
 </style>
 </head>
 <body>
@@ -39,7 +59,11 @@
 
   <div class="row" id="progressRow" style="display:none">
     <progress id="progress" max="1" value="0"></progress>
-    <div id="status"></div>
+    <div id="status">
+      <span id="statusText"></span>
+      <button class="cancel" id="cancelBtn">Cancelar</button>
+    </div>
+    <div id="log"></div>
   </div>
 
   <div id="error"></div>
@@ -50,28 +74,115 @@ const drop = document.getElementById('drop');
 const fileInput = document.getElementById('fileInput');
 const progressRow = document.getElementById('progressRow');
 const progressEl = document.getElementById('progress');
-const statusEl = document.getElementById('status');
+const statusEl = document.getElementById('statusText');
+const cancelBtn = document.getElementById('cancelBtn');
 const errorEl = document.getElementById('error');
 const resultEl = document.getElementById('result');
+const logEl = document.getElementById('log');
 
-drop.addEventListener('click', () => fileInput.click());
-drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('hover'); });
+const JOB_KEY = 'pdf2epub_job_id';
+
+const STAGE_LABELS = {
+  queued: 'En cola',
+  classify: 'Detectando páginas escaneadas',
+  ocr: 'OCR (páginas escaneadas)',
+  extract: 'Extrayendo contenido',
+  extract_parallel: 'Extrayendo contenido (paralelo)',
+  build_epub: 'Ensamblando EPUB',
+};
+
+const STAGE_INTRO = {
+  classify: 'Abriendo el PDF y revisando página por página cuáles tienen texto y cuáles son escaneadas...',
+  ocr: 'Se encontraron páginas escaneadas: iniciando OCR con Tesseract. En libros grandes esto puede tardar varios minutos.',
+  extract: 'OCR listo (o no hacía falta). Extrayendo texto, imágenes y tablas capítulo por capítulo...',
+  extract_parallel: 'Libro mayormente digital: extrayendo capítulos en paralelo en varios procesos para aprovechar los cores del Mac.',
+  build_epub: 'Contenido extraído. Ensamblando el archivo EPUB final...',
+};
+
+let logState = { stage: null, lastMilestone: 0 };
+let currentJobId = null;
+
+function logLine(msg) {
+  const t = new Date().toLocaleTimeString('es-CO', { hour12: false });
+  const line = document.createElement('div');
+  line.innerHTML = `<span class="t">${t}</span>${msg}`;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function logProgress(stage, current, total) {
+  logEl.style.display = 'block';
+
+  if (stage !== logState.stage) {
+    logLine(STAGE_INTRO[stage] || `Etapa: ${STAGE_LABELS[stage] || stage}`);
+    logState = { stage, lastMilestone: 0 };
+  }
+
+  if (stage === 'ocr') {
+    // Elapsed seconds, ticking — log every 5s so the panel visibly moves.
+    if (current - logState.lastMilestone >= 5) {
+      logLine(`OCR en progreso... ${current}s transcurridos`);
+      logState.lastMilestone = current;
+    }
+  } else if (total > 0) {
+    const step = Math.max(1, Math.floor(total / 15)); // ~15 log lines per stage
+    if (current - logState.lastMilestone >= step || current === total) {
+      logLine(`${current}/${total} páginas procesadas`);
+      logState.lastMilestone = current;
+    }
+  }
+}
+
+function notify(title, body) {
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission === 'granted') {
+    new Notification(title, { body });
+  }
+}
+
+function setFormDisabled(disabled) {
+  drop.classList.toggle('disabled', disabled);
+  fileInput.disabled = disabled;
+}
+
+drop.addEventListener('click', () => { if (!fileInput.disabled) fileInput.click(); });
+drop.addEventListener('dragover', e => { e.preventDefault(); if (!fileInput.disabled) drop.classList.add('hover'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('hover'));
 drop.addEventListener('drop', e => {
   e.preventDefault();
   drop.classList.remove('hover');
+  if (fileInput.disabled) return;
   if (e.dataTransfer.files.length) startJob(e.dataTransfer.files[0]);
 });
 fileInput.addEventListener('change', () => {
   if (fileInput.files.length) startJob(fileInput.files[0]);
 });
+cancelBtn.addEventListener('click', async () => {
+  if (!currentJobId) return;
+  cancelBtn.disabled = true;
+  cancelBtn.textContent = 'Cancelando...';
+  await fetch(`/jobs/${currentJobId}/cancel`, { method: 'POST' });
+  logLine('Cancelación solicitada...');
+});
 
 async function startJob(file) {
-  errorEl.textContent = '';
+  if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+
+  errorEl.innerHTML = '';
   resultEl.innerHTML = '';
+  logEl.innerHTML = '';
+  logState = { stage: null, lastMilestone: 0 };
   progressRow.style.display = 'block';
+  progressEl.style.display = '';
   progressEl.removeAttribute('value');
+  cancelBtn.style.display = '';
+  cancelBtn.disabled = false;
+  cancelBtn.textContent = 'Cancelar';
   statusEl.textContent = 'Subiendo...';
+  logLine(`Subiendo ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)...`);
+  setFormDisabled(true);
 
   const form = new FormData();
   form.append('file', file);
@@ -81,37 +192,103 @@ async function startJob(file) {
 
   const res = await fetch('/jobs', { method: 'POST', body: form });
   if (!res.ok) {
-    errorEl.textContent = 'Error al subir el archivo.';
+    const body = await res.json().catch(() => ({}));
+    errorEl.textContent = body.error || 'Error al subir el archivo.';
+    progressRow.style.display = 'none';
+    setFormDisabled(false);
     return;
   }
   const { job_id } = await res.json();
+  currentJobId = job_id;
+  localStorage.setItem(JOB_KEY, job_id);
   poll(job_id);
+}
+
+function showErrorDetail(summary, detail) {
+  const details = document.createElement('details');
+  const summaryEl = document.createElement('summary');
+  summaryEl.textContent = 'Ver detalle técnico';
+  const pre = document.createElement('pre');
+  pre.textContent = detail || '(sin detalle)';
+  details.appendChild(summaryEl);
+  details.appendChild(pre);
+  errorEl.innerHTML = `<div>Error: ${summary}</div>`;
+  errorEl.appendChild(details);
 }
 
 async function poll(jobId) {
   const res = await fetch(`/jobs/${jobId}`);
+  if (!res.ok) {
+    // Server restarted or job purged — stop trying to reconnect to a dead job.
+    localStorage.removeItem(JOB_KEY);
+    progressRow.style.display = 'none';
+    setFormDisabled(false);
+    errorEl.textContent = 'No se encontró el trabajo (¿se reinició el servidor?). Sube el archivo de nuevo.';
+    return;
+  }
   const job = await res.json();
 
   if (job.status === 'error') {
-    errorEl.textContent = 'Error: ' + job.error;
+    showErrorDetail(job.error_summary || job.error || 'error desconocido', job.error_detail);
+    logLine(`ERROR: ${job.error_summary || job.error}`);
+    notify('pdf2epub: falló la conversión', job.error_summary || '');
     progressRow.style.display = 'none';
+    setFormDisabled(false);
+    localStorage.removeItem(JOB_KEY);
+    return;
+  }
+
+  if (job.status === 'cancelled') {
+    logLine('Conversión cancelada.');
+    statusEl.textContent = 'Cancelado.';
+    progressEl.style.display = 'none';
+    cancelBtn.style.display = 'none';
+    setFormDisabled(false);
+    localStorage.removeItem(JOB_KEY);
     return;
   }
 
   if (job.total) {
     progressEl.max = job.total;
     progressEl.value = job.current;
+  } else {
+    progressEl.removeAttribute('value'); // indeterminate: animated native bar
   }
-  statusEl.textContent = `${job.stage} (${job.current}/${job.total || '?'})`;
+
+  const label = STAGE_LABELS[job.stage] || job.stage;
+  if (job.stage === 'ocr') {
+    statusEl.textContent = `${label} — ${job.current}s transcurridos (normal que tarde en libros grandes)`;
+  } else {
+    statusEl.textContent = `${label} (${job.current}/${job.total || '?'})`;
+  }
+  logProgress(job.stage, job.current, job.total);
 
   if (job.status === 'done') {
-    progressRow.style.display = 'none';
+    logLine('Listo. EPUB generado.');
+    notify('pdf2epub: EPUB listo', job.filename || '');
+    progressEl.style.display = 'none';
+    cancelBtn.style.display = 'none';
+    statusEl.textContent = 'Completado.';
     resultEl.innerHTML = `<a class="download" href="/jobs/${jobId}/download">Descargar EPUB</a>`;
+    setFormDisabled(false);
+    localStorage.removeItem(JOB_KEY);
     return;
   }
 
-  setTimeout(() => poll(jobId), 1500);
+  setTimeout(() => poll(jobId), 1000);
 }
+
+// On load: if a job was in flight when the page was closed/refreshed, reconnect to it
+// instead of showing an empty form (the job keeps running on the server either way).
+(function reconnect() {
+  const savedId = localStorage.getItem(JOB_KEY);
+  if (!savedId) return;
+  currentJobId = savedId;
+  progressRow.style.display = 'block';
+  logLine('Reconectando a la conversión en curso...');
+  setFormDisabled(true);
+  poll(savedId);
+})();
 </script>
 </body>
 </html>

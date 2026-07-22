@@ -14,8 +14,10 @@ app = typer.Typer(add_completion=False, help="Convertidor de PDF a EPUB para lib
 console = Console()
 
 STAGE_LABELS = {
-    "ocr": "OCR (páginas escaneadas)",
+    "classify": "Detectando páginas escaneadas",
+    "ocr": "OCR (páginas escaneadas) — puede tardar minutos u horas en libros grandes",
     "extract": "Extrayendo contenido",
+    "extract_parallel": "Extrayendo contenido (paralelo — libro mayormente digital)",
     "build_epub": "Ensamblando EPUB",
 }
 
@@ -23,15 +25,19 @@ STAGE_LABELS = {
 @app.command("convert")
 def convert_cmd(
     input_pdf: Annotated[Path, typer.Argument(help="Ruta al PDF de entrada")],
-    output: Annotated[Path, typer.Option("-o", "--output", help="Ruta del EPUB de salida")] = None,
+    output: Annotated[Path | None, typer.Option("-o", "--output", help="Ruta del EPUB de salida")] = None,
     lang: Annotated[str, typer.Option("--lang", help="Idiomas OCR (código tesseract)")] = "spa+eng+por",
     no_ocr: Annotated[bool, typer.Option("--no-ocr", help="Desactivar OCR aunque haya páginas escaneadas")] = False,
     max_image_size: Annotated[int, typer.Option("--max-image-size", help="Lado máximo en px de las imágenes")] = 1600,
     jpeg_quality: Annotated[int, typer.Option("--jpeg-quality", help="Calidad JPEG (1-100)")] = 85,
-    split_every: Annotated[int, typer.Option("--split-every", help="Páginas por capítulo si no hay outline/heurística")] = 50,
-    cover: Annotated[Path, typer.Option("--cover", help="Imagen de portada; por defecto renderiza la página 1")] = None,
-    title: Annotated[str, typer.Option("--title", help="Título; por defecto metadata del PDF")] = None,
-    author: Annotated[str, typer.Option("--author", help="Autor; por defecto metadata del PDF")] = None,
+    split_every: Annotated[
+        int, typer.Option("--split-every", help="Páginas por capítulo si no hay outline/heurística")
+    ] = 50,
+    cover: Annotated[
+        Path | None, typer.Option("--cover", help="Imagen de portada; por defecto renderiza la página 1")
+    ] = None,
+    title: Annotated[str | None, typer.Option("--title", help="Título; por defecto metadata del PDF")] = None,
+    author: Annotated[str | None, typer.Option("--author", help="Autor; por defecto metadata del PDF")] = None,
 ) -> None:
     """Convierte un PDF a EPUB."""
     deps.check_or_exit(console)
@@ -56,15 +62,16 @@ def convert_cmd(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
-        TextColumn("{task.completed}/{task.total}"),
+        TextColumn("{task.fields[detail]}"),
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task_id = progress.add_task("Iniciando...", total=None)
+        task_id = progress.add_task("Iniciando...", total=None, detail="")
 
         def on_progress(stage: str, current: int, total: int) -> None:
             label = STAGE_LABELS.get(stage, stage)
-            progress.update(task_id, description=label, completed=current, total=total or None)
+            detail = f"{current}s" if stage == "ocr" else f"{current}/{total}"
+            progress.update(task_id, description=label, completed=current, total=total or None, detail=detail)
 
         convert(input_pdf, output_path, options=options, on_progress=on_progress)
 

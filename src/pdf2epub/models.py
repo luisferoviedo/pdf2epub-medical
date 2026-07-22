@@ -27,7 +27,13 @@ class ImageBlock:
     caption: str = ""
 
 
-ContentItem = TextBlock | ImageBlock
+@dataclass
+class TableBlock:
+    kind: str = "table"
+    html: str = ""  # well-formed XHTML <table>...</table>, ready to embed as-is
+
+
+ContentItem = TextBlock | ImageBlock | TableBlock
 
 
 @dataclass

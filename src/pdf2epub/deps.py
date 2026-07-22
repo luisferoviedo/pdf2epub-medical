@@ -11,11 +11,7 @@ REQUIRED_BINARIES = {
 
 
 def missing_binaries() -> dict[str, str]:
-    return {
-        name: install_hint
-        for name, install_hint in REQUIRED_BINARIES.items()
-        if shutil.which(name) is None
-    }
+    return {name: install_hint for name, install_hint in REQUIRED_BINARIES.items() if shutil.which(name) is None}
 
 
 def check_or_exit(console) -> None:
