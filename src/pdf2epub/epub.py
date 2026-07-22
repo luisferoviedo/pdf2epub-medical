@@ -16,8 +16,45 @@ from ebooklib import epub
 
 from pdf2epub.models import ChapterContent, ImageBlock, TextBlock
 
+FONTS_DIR = Path(__file__).parent / "assets" / "fonts"
+
+# Literata (SIL OFL): designed by Google specifically for on-screen long-form
+# reading (used in Google Play Books), not a generic system serif. Embedded
+# directly so the book looks the same and reads well on every device instead
+# of falling back to whatever "serif" happens to mean on that e-reader.
+FONT_FILES = {
+    ("normal", "normal"): "Literata-Regular.ttf",
+    ("normal", "italic"): "Literata-Italic.ttf",
+    ("bold", "normal"): "Literata-Bold.ttf",
+    ("bold", "italic"): "Literata-BoldItalic.ttf",
+}
+
 DEFAULT_CSS = """
-body { font-family: serif; line-height: 1.4; margin: 1em; }
+@font-face {
+  font-family: "Literata";
+  src: url("../fonts/Literata-Regular.ttf");
+  font-weight: normal;
+  font-style: normal;
+}
+@font-face {
+  font-family: "Literata";
+  src: url("../fonts/Literata-Italic.ttf");
+  font-weight: normal;
+  font-style: italic;
+}
+@font-face {
+  font-family: "Literata";
+  src: url("../fonts/Literata-Bold.ttf");
+  font-weight: bold;
+  font-style: normal;
+}
+@font-face {
+  font-family: "Literata";
+  src: url("../fonts/Literata-BoldItalic.ttf");
+  font-weight: bold;
+  font-style: italic;
+}
+body { font-family: "Literata", Georgia, "Times New Roman", serif; line-height: 1.4; margin: 1em; }
 h1, h2 { line-height: 1.2; margin-top: 1.5em; }
 p { margin: 0 0 0.8em 0; text-align: justify; }
 img { max-width: 100%; height: auto; display: block; margin: 1em auto; }
@@ -78,6 +115,15 @@ def build_epub(
         content=DEFAULT_CSS,
     )
     book.add_item(style)
+
+    for i, filename in enumerate(FONT_FILES.values()):
+        font_item = epub.EpubItem(
+            uid=f"font_{i}",
+            file_name=f"fonts/{filename}",
+            media_type="font/ttf",
+            content=(FONTS_DIR / filename).read_bytes(),
+        )
+        book.add_item(font_item)
 
     added_image_ids: set[str] = set()
     spine: list = ["nav"]
