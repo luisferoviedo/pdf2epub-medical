@@ -68,6 +68,40 @@ def test_repeated_header_with_embedded_page_number_is_excluded(tmp_path):
     assert all("Pagina 4" not in t and "Pagina 5" not in t for t in texts)
 
 
+def test_per_section_running_header_is_excluded_in_multipart_book(tmp_path):
+    """Regression test for a real bug found converting the actual Nelson
+    Textbook of Pediatrics: a multi-part book's running head changes per
+    Part (e.g. "Part I ..." for 300 pages, then "Part II ..." for the next
+    400), so no single header text ever covers a majority of the *whole*
+    book. The old >=60%-of-book threshold never caught any of them; each
+    part's header must still be recognized as repeated within its own span.
+    """
+    pdf_path = tmp_path / "book.pdf"
+    doc = fitz.open()
+    # Three parts of 8 pages each with genuinely different titles (like real
+    # roman-numeral part headers with distinct section names) — no single
+    # header reaches 60% of the 24-page book (each is exactly 33%), but each
+    # is clearly repeating within its own span.
+    part_titles = ["The Field of Pediatrics", "Infectious Diseases", "Metabolic Disorders"]
+    for part, title in enumerate(part_titles):
+        for i in range(8):
+            page = doc.new_page(width=400, height=600)
+            page.insert_text((40, 20), f"Part {part + 1}  u  {title}", fontsize=8)
+            page.insert_textbox(fitz.Rect(30, 90, 370, 550), f"Contenido parte {part} pagina {i}. " * 10, fontsize=9)
+    doc.save(pdf_path)
+    doc.close()
+
+    doc = fitz.open(pdf_path)
+    repeated = extract.detect_repeated_texts(doc, sample_every=1)
+    for title in part_titles:
+        assert f"Part #  u  {title}" in repeated
+
+    chapter = Chapter(title="C1", start_page=0, end_page=doc.page_count)
+    content = extract.extract_chapter_content(doc, chapter, repeated_texts=repeated, seen_image_hashes=set())
+    texts = [item.text for item in content.items if isinstance(item, TextBlock)]
+    assert all(title not in t for t in texts for title in part_titles)
+
+
 def test_find_tables_skipped_on_scanned_pages(tmp_path):
     """A scanned page's "table" is just part of its one full-page raster
     image — running the vector table-structure heuristic against it is

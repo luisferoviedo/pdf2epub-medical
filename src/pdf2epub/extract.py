@@ -17,7 +17,8 @@ from pdf2epub.images import content_hash, recompress
 from pdf2epub.models import Chapter, ChapterContent, ImageBlock, TextBlock
 
 HEADER_FOOTER_ZONE_RATIO = 0.10  # top/bottom 10% of page height
-HEADER_FOOTER_MIN_FREQUENCY = 0.60  # must repeat on >=60% of sampled pages
+HEADER_FOOTER_MIN_FREQUENCY = 0.03  # must repeat on >=3% of sampled pages
+HEADER_FOOTER_MIN_OCCURRENCES = 3  # ...and at least this many times outright
 FULL_WIDTH_RATIO = 0.60  # blocks wider than this fraction of page count as "full width"
 COLUMN_GAP_RATIO = 0.08  # min horizontal gap (as fraction of page width) to split columns
 
@@ -37,6 +38,16 @@ def detect_repeated_texts(doc: fitz.Document, sample_every: int = 5) -> set[str]
     sampled pages. Returns normalized keys (see _normalize_repeat_key) —
     callers must normalize candidate text the same way before checking
     membership.
+
+    The frequency bar is deliberately low (3% of sampled pages, min 3
+    occurrences) rather than a high one like ">=60% of the whole book": a
+    multi-part book's running head changes per Part/Chapter, so no single
+    header text ever covers a majority of the *entire* book — a real running
+    head for a 300-page Part in a 2500-page book might be under 15% of all
+    sampled pages. Body text essentially never repeats verbatim at the exact
+    same header/footer-zone position across multiple pages by coincidence,
+    so a low bar here doesn't risk false positives the way it would for
+    ordinary body paragraphs.
     """
     counts: Counter[str] = Counter()
     sampled = 0
@@ -59,7 +70,7 @@ def detect_repeated_texts(doc: fitz.Document, sample_every: int = 5) -> set[str]
 
     if sampled == 0:
         return set()
-    threshold = max(2, int(sampled * HEADER_FOOTER_MIN_FREQUENCY))
+    threshold = max(HEADER_FOOTER_MIN_OCCURRENCES, int(sampled * HEADER_FOOTER_MIN_FREQUENCY))
     return {key for key, n in counts.items() if n >= threshold}
 
 
