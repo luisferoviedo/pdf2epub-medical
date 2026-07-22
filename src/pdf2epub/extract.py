@@ -13,9 +13,8 @@ from collections import Counter
 
 import fitz  # PyMuPDF
 
-from pdf2epub import tables
 from pdf2epub.images import content_hash, recompress
-from pdf2epub.models import Chapter, ChapterContent, ImageBlock, TableBlock, TextBlock
+from pdf2epub.models import Chapter, ChapterContent, ImageBlock, TextBlock
 
 HEADER_FOOTER_ZONE_RATIO = 0.10  # top/bottom 10% of page height
 HEADER_FOOTER_MIN_FREQUENCY = 0.60  # must repeat on >=60% of sampled pages
@@ -145,23 +144,18 @@ def extract_chapter_content(
             except Exception:
                 pass  # table detection is best-effort; never fail the whole page over it
 
-        table_html = tables.extract_table_html(page, len(table_bboxes)) if table_bboxes else None
-
-        if table_html is not None:
-            # Real, searchable text — the ML layout model recognized exactly
-            # as many tables as our own cheap detector, so we trust the match.
-            for html in table_html:
-                content.items.append(TableBlock(html=html))
-        else:
-            # Fallback: model unavailable, errored, or its table count didn't
-            # match ours — render each region as an image rather than risk
-            # silently dropping or misplacing a dosage table.
-            for table_bbox in table_bboxes:
-                pix = page.get_pixmap(clip=table_bbox, matrix=fitz.Matrix(2, 2))
-                data, mime = recompress(pix.tobytes("png"), max_side=max_image_size, jpeg_quality=jpeg_quality)
-                h = content_hash(data)
-                image_id = f"table_{page_index}_{h[:12]}"
-                content.items.append(ImageBlock(data=data, mime=mime, image_id=image_id, caption=""))
+        # Always render as image, never as extracted HTML text: tried an ML
+        # layout model for real selectable table text, but on complex
+        # multi-column data tables (real medical textbook content, not
+        # synthetic tests) it silently scrambled cell order — worse than an
+        # image, since a reader can't tell the numbers are wrong. Visual
+        # fidelity beats "sometimes searchable, sometimes garbled".
+        for table_bbox in table_bboxes:
+            pix = page.get_pixmap(clip=table_bbox, matrix=fitz.Matrix(2, 2))
+            data, mime = recompress(pix.tobytes("png"), max_side=max_image_size, jpeg_quality=jpeg_quality)
+            h = content_hash(data)
+            image_id = f"table_{page_index}_{h[:12]}"
+            content.items.append(ImageBlock(data=data, mime=mime, image_id=image_id, caption=""))
 
         page_dict = page.get_text("dict")
         blocks = page_dict.get("blocks", [])

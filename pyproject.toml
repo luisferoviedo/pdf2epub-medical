@@ -18,7 +18,6 @@ dependencies = [
     "fastapi>=0.111",
     "uvicorn>=0.30",
     "python-multipart>=0.0.9",
-    "pymupdf-layout>=1.28.0",
 ]
 
 [dependency-groups]

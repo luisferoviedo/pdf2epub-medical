@@ -3,7 +3,7 @@ from unittest.mock import patch
 import fitz
 
 from pdf2epub import extract
-from pdf2epub.models import Chapter, ImageBlock, TableBlock, TextBlock
+from pdf2epub.models import Chapter, ImageBlock, TextBlock
 from tests.fixtures import make_mixed_scan_digital_pdf, make_two_column_pdf
 
 
@@ -149,7 +149,11 @@ def _make_table_pdf(path):
     doc.close()
 
 
-def test_table_extracted_as_real_html(tmp_path):
+def test_table_always_rendered_as_image(tmp_path):
+    """Tried extracting tables as real HTML text via an ML layout model, but
+    on complex multi-column data tables it silently scrambled cell order —
+    worse than an image, since a reader can't tell the numbers are wrong.
+    Tables always render as images now, no text-extraction attempt at all."""
     pdf_path = tmp_path / "table.pdf"
     _make_table_pdf(pdf_path)
 
@@ -157,22 +161,4 @@ def test_table_extracted_as_real_html(tmp_path):
     chapter = Chapter(title="C1", start_page=0, end_page=1)
     content = extract.extract_chapter_content(doc, chapter, repeated_texts=set(), seen_image_hashes=set())
 
-    table_blocks = [item for item in content.items if isinstance(item, TableBlock)]
-    assert len(table_blocks) == 1
-    assert "Paracetamol" in table_blocks[0].html
-    # No fallback image should be produced when the real table extraction succeeds.
-    assert not any(isinstance(item, ImageBlock) for item in content.items)
-
-
-def test_table_falls_back_to_image_when_model_unavailable(tmp_path):
-    pdf_path = tmp_path / "table.pdf"
-    _make_table_pdf(pdf_path)
-
-    doc = fitz.open(pdf_path)
-    chapter = Chapter(title="C1", start_page=0, end_page=1)
-
-    with patch("pdf2epub.extract.tables.extract_table_html", return_value=None):
-        content = extract.extract_chapter_content(doc, chapter, repeated_texts=set(), seen_image_hashes=set())
-
-    assert not any(isinstance(item, TableBlock) for item in content.items)
     assert any(isinstance(item, ImageBlock) for item in content.items)
