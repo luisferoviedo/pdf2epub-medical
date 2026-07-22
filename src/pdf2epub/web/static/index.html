@@ -103,9 +103,16 @@ let logState = { stage: null, lastMilestone: 0 };
 let currentJobId = null;
 
 function logLine(msg) {
+  // msg can contain a user-supplied filename (e.g. from file.name) — build
+  // the line with text nodes, never innerHTML, so it can't be interpreted
+  // as markup (a PDF named "<img src=x onerror=...>.pdf" must stay inert).
   const t = new Date().toLocaleTimeString('es-CO', { hour12: false });
   const line = document.createElement('div');
-  line.innerHTML = `<span class="t">${t}</span>${msg}`;
+  const timeSpan = document.createElement('span');
+  timeSpan.className = 't';
+  timeSpan.textContent = t;
+  line.appendChild(timeSpan);
+  line.appendChild(document.createTextNode(msg));
   logEl.appendChild(line);
   logEl.scrollTop = logEl.scrollHeight;
 }
@@ -205,6 +212,9 @@ async function startJob(file) {
 }
 
 function showErrorDetail(summary, detail) {
+  // summary is server-generated from a Python exception message, which can
+  // itself embed attacker-influenced text (e.g. a crafted filename) — never
+  // interpolate it into innerHTML.
   const details = document.createElement('details');
   const summaryEl = document.createElement('summary');
   summaryEl.textContent = 'Ver detalle técnico';
@@ -212,7 +222,10 @@ function showErrorDetail(summary, detail) {
   pre.textContent = detail || '(sin detalle)';
   details.appendChild(summaryEl);
   details.appendChild(pre);
-  errorEl.innerHTML = `<div>Error: ${summary}</div>`;
+  errorEl.innerHTML = '';
+  const summaryLine = document.createElement('div');
+  summaryLine.textContent = `Error: ${summary}`;
+  errorEl.appendChild(summaryLine);
   errorEl.appendChild(details);
 }
 

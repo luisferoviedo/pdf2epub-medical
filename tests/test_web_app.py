@@ -11,7 +11,7 @@ import time
 
 from fastapi.testclient import TestClient
 
-from pdf2epub.web.app import app
+from pdf2epub.web.app import WORK_DIR, app
 from tests.fixtures import make_two_column_pdf
 
 
@@ -73,6 +73,36 @@ def test_full_job_lifecycle_via_http(tmp_path):
     assert download.status_code == 200
     assert download.headers["content-type"] == "application/epub+zip"
     assert len(download.content) > 0
+
+
+def test_upload_filename_path_traversal_is_contained(tmp_path):
+    """A crafted filename like "../../etc/whatever" must not let the upload
+    write outside its own job directory under WORK_DIR."""
+    pdf_path = tmp_path / "book.pdf"
+    make_two_column_pdf(pdf_path, pages=1, with_toc=False)
+
+    escape_target = WORK_DIR.parent / "escaped_by_test.txt"
+    escape_target.unlink(missing_ok=True)
+
+    client = TestClient(app)
+    traversal_name = f"../../{escape_target.name}"
+    with pdf_path.open("rb") as f:
+        res = client.post("/jobs", files={"file": (traversal_name, f, "application/pdf")})
+    assert res.status_code == 200
+    job_id = res.json()["job_id"]
+
+    assert not escape_target.exists(), "upload escaped its job directory"
+    saved_files = list((WORK_DIR / job_id).iterdir())
+    assert len(saved_files) == 1
+    assert saved_files[0].parent == WORK_DIR / job_id
+
+    # Drain the job so it doesn't leak into other tests.
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        status = client.get(f"/jobs/{job_id}").json()
+        if status["status"] in ("done", "error", "cancelled"):
+            break
+        time.sleep(0.2)
 
 
 def test_concurrent_upload_rejected_while_job_running(tmp_path):

@@ -1,0 +1,12 @@
+=== Mod B: benchmark de memoria pico (EPUB en memoria vs streaming) ===
+
+Mediciones (grupo de control, arquitectura actual sin cambios):
+    150 paginas:    7.7s, pico RSS    73.0 MB
+    300 paginas:   12.0s, pico RSS    90.1 MB
+
+Pendiente estimada: 0.114 MB/pagina
+Proyeccion a 2500 paginas (tamano objetivo del proyecto): 340 MB
+Umbral de aceptacion (streaming se justifica si se supera): 1500 MB
+
+DECISION: RECHAZAR
+Motivo: la proyeccion queda comodamente por debajo del umbral en un M1 Air de 8GB (deja margen de sobra para el SO y otras apps). Reescribir el ensamblado del EPUB a streaming resolveria un problema que los datos no muestran que exista. No se implementa.

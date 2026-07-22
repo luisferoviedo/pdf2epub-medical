@@ -104,13 +104,43 @@ def chapters_by_fixed_size(doc: fitz.Document, fallback_every: int = 50) -> list
     return chapters
 
 
+MIN_PLAUSIBLE_AVG_CHAPTER_LENGTH = 2  # pages; below this the heuristic is treating noise as headings
+
+
+def _is_plausible(chapters: list[Chapter], page_count: int) -> bool:
+    """Rejects the font-size heuristic's output when it fires on nearly every
+    page — a running header or page number that's marginally larger than
+    body text (common in real books) turns into a false heading on every
+    single page, producing one 1-page "chapter" per page instead of a
+    handful of real ones. A book with genuinely short chapters still clears
+    this bar comfortably; only the near-one-per-page pathology trips it.
+    """
+    if not chapters:
+        return False
+    return (page_count / len(chapters)) >= MIN_PLAUSIBLE_AVG_CHAPTER_LENGTH
+
+
+def _cover_from_page_zero(chapters: list[Chapter]) -> list[Chapter]:
+    """Prepends a synthetic chapter for any pages before the first detected
+    chapter. Without this, a PDF whose outline (or detected headings) don't
+    start on page 1 — true of nearly every book with a cover, copyright
+    page, or foreword before the first bookmarked chapter — silently drops
+    that front matter: those pages belong to no Chapter range, so nothing
+    downstream ever reads or extracts them.
+    """
+    if not chapters or chapters[0].start_page == 0:
+        return chapters
+    intro = Chapter(title="Introducción", start_page=0, end_page=chapters[0].start_page)
+    return [intro, *chapters]
+
+
 def detect_chapters(doc: fitz.Document, fallback_every: int = 50) -> list[Chapter]:
     chapters = chapters_from_outline(doc)
     if chapters:
-        return chapters
+        return _cover_from_page_zero(chapters)
 
     chapters = chapters_from_font_heuristic(doc)
-    if chapters:
-        return chapters
+    if chapters and _is_plausible(chapters, doc.page_count):
+        return _cover_from_page_zero(chapters)
 
     return chapters_by_fixed_size(doc, fallback_every=fallback_every)

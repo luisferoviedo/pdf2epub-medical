@@ -85,7 +85,12 @@ async def create_job(
     job_dir = WORK_DIR / job_id
     job_dir.mkdir(parents=True)
 
-    input_path = job_dir / (file.filename or "input.pdf")
+    # .name strips any directory components the client sent (e.g. "../../etc/foo")
+    # — without this, a crafted filename can write outside job_dir entirely.
+    safe_filename = Path(file.filename or "").name
+    if not safe_filename or safe_filename in (".", ".."):
+        safe_filename = "input.pdf"
+    input_path = job_dir / safe_filename
     with input_path.open("wb") as f:
         shutil.copyfileobj(file.file, f)
 
