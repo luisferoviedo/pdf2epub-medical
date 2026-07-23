@@ -3,46 +3,199 @@
 <head>
 <meta charset="utf-8" />
 <title>pdf2epub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  body { font-family: -apple-system, sans-serif; max-width: 640px; margin: 4rem auto; padding: 0 1rem; color: #222; }
-  h1 { font-size: 1.4rem; }
-  #drop { border: 2px dashed #999; border-radius: 8px; padding: 3rem 1rem; text-align: center; color: #666; cursor: pointer; }
-  #drop.hover { border-color: #333; color: #333; }
-  #drop.disabled { opacity: 0.5; cursor: not-allowed; }
-  .row { margin: 1rem 0; }
-  label { display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem; }
-  input[type=text], input[type=number] { width: 100%; box-sizing: border-box; padding: 0.4rem; }
-  progress { width: 100%; }
-  #status { font-size: 0.9rem; color: #444; margin-top: 0.5rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-  a.download { display: inline-block; margin-top: 1rem; padding: 0.6rem 1.2rem; background: #222; color: #fff; text-decoration: none; border-radius: 6px; }
-  #error { color: #b00020; margin-top: 0.5rem; }
-  #error summary { cursor: pointer; font-size: 0.85rem; color: #555; margin-top: 0.3rem; }
-  #error pre { white-space: pre-wrap; background: #f6f6f6; padding: 0.5rem; border-radius: 4px; font-size: 0.75rem; max-height: 200px; overflow-y: auto; }
-  button.cancel { font-size: 0.8rem; padding: 0.25rem 0.6rem; border: 1px solid #b00020; color: #b00020; background: #fff; border-radius: 4px; cursor: pointer; }
-  button.cancel:hover { background: #fdeaea; }
+  :root {
+    --paper: #f6f5f0;
+    --paper-raised: #efeee7;
+    --ink: #1e201c;
+    --ink-soft: #55564e;
+    --ink-faint: #8b8c82;
+    --rule: #d8d6cc;
+    --stamp: #a8342a;
+    --stamp-soft: #f3e2df;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #1a1b1e;
+      --paper-raised: #232429;
+      --ink: #e7e4d8;
+      --ink-soft: #b3b0a2;
+      --ink-faint: #706e64;
+      --rule: #35363a;
+      --stamp: #d0564a;
+      --stamp-soft: #3a2422;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #1a1b1e;
+    --paper-raised: #232429;
+    --ink: #e7e4d8;
+    --ink-soft: #b3b0a2;
+    --ink-faint: #706e64;
+    --rule: #35363a;
+    --stamp: #d0564a;
+    --stamp-soft: #3a2422;
+  }
+  :root[data-theme="light"] {
+    --paper: #f6f5f0;
+    --paper-raised: #efeee7;
+    --ink: #1e201c;
+    --ink-soft: #55564e;
+    --ink-faint: #8b8c82;
+    --rule: #d8d6cc;
+    --stamp: #a8342a;
+    --stamp-soft: #f3e2df;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    font-family: "IBM Plex Sans", -apple-system, sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    max-width: 640px;
+    margin: 4rem auto;
+    padding: 0 1.25rem 4rem;
+    line-height: 1.5;
+  }
+
+  .stamp {
+    display: inline-block;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-weight: 600;
+    font-size: 0.95rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--stamp);
+    border: 2px solid var(--stamp);
+    border-radius: 3px;
+    padding: 0.3rem 0.7rem;
+    transform: rotate(-1.5deg);
+  }
+  h1 { margin: 0 0 0.6rem; }
+  .tagline { color: var(--ink-soft); margin: 0 0 1.75rem; font-size: 0.95rem; }
+  .rule { border: none; border-top: 1px solid var(--rule); margin: 1.75rem 0; }
+
+  #drop {
+    border: 1.5px dashed var(--ink-faint);
+    border-radius: 4px;
+    padding: 3rem 1rem;
+    text-align: center;
+    color: var(--ink-soft);
+    cursor: pointer;
+    font-size: 0.95rem;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  }
+  #drop.hover { border-color: var(--stamp); color: var(--ink); background: var(--stamp-soft); }
+  #drop.disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .row { margin: 1.1rem 0; }
+  label {
+    display: block;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 0.35rem;
+  }
+  input[type=text], input[type=number] {
+    width: 100%;
+    font-family: inherit;
+    font-size: 0.9rem;
+    color: var(--ink);
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 0.5rem 0.6rem;
+  }
+  input:focus-visible, button:focus-visible, #drop:focus-visible {
+    outline: 2px solid var(--stamp);
+    outline-offset: 2px;
+  }
+
+  progress { width: 100%; accent-color: var(--stamp); height: 6px; }
+  #status {
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+    margin-top: 0.6rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+  a.download {
+    display: inline-block;
+    margin-top: 1rem;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.85rem;
+    letter-spacing: 0.03em;
+    padding: 0.65rem 1.3rem;
+    background: var(--stamp);
+    color: #fdfaf5;
+    text-decoration: none;
+    border-radius: 3px;
+  }
+  a.download:hover { opacity: 0.9; }
+
+  #error { color: var(--stamp); margin-top: 0.75rem; font-size: 0.9rem; }
+  #error summary { cursor: pointer; font-size: 0.8rem; color: var(--ink-soft); margin-top: 0.4rem; }
+  #error pre {
+    white-space: pre-wrap;
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    padding: 0.6rem;
+    border-radius: 3px;
+    font-size: 0.72rem;
+    max-height: 200px;
+    overflow-y: auto;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+  }
+
+  button.cancel {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 0.3rem 0.65rem;
+    border: 1px solid var(--stamp);
+    color: var(--stamp);
+    background: transparent;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  button.cancel:hover { background: var(--stamp-soft); }
+  button.cancel:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Deliberately terminal-styled, not themed to match the page: this is a
+     live technical readout, and looking like one is the point. */
   #log {
     display: none;
-    margin-top: 0.75rem;
-    height: 140px;
+    margin-top: 0.85rem;
+    height: 150px;
     overflow-y: auto;
-    background: #1e1e1e;
-    color: #ddd;
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 0.78rem;
-    line-height: 1.5;
-    padding: 0.5rem 0.7rem;
-    border-radius: 6px;
+    background: #17181a;
+    color: #d6d3c4;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.76rem;
+    line-height: 1.55;
+    padding: 0.6rem 0.75rem;
+    border-radius: 4px;
   }
   #log div { white-space: pre-wrap; }
-  #log .t { color: #888; margin-right: 0.4rem; }
+  #log .t { color: #6f7168; margin-right: 0.5rem; }
 </style>
 </head>
 <body>
-  <h1>pdf2epub</h1>
-  <p>Arrastra un PDF para convertirlo a EPUB.</p>
+  <span class="stamp">pdf2epub</span>
+  <p class="tagline">Convierte PDFs grandes e ilustrados a EPUB. Arrastra un archivo para empezar.</p>
 
-  <div id="drop">Suelta el PDF aquí, o haz clic para elegir archivo</div>
+  <div id="drop" tabindex="0" role="button" aria-label="Subir PDF">Suelta el PDF aquí, o haz clic para elegir archivo</div>
   <input type="file" id="fileInput" accept="application/pdf" style="display:none" />
+
+  <hr class="rule" />
 
   <div class="row">
     <label for="lang">Idiomas OCR</label>
@@ -153,6 +306,9 @@ function setFormDisabled(disabled) {
 }
 
 drop.addEventListener('click', () => { if (!fileInput.disabled) fileInput.click(); });
+drop.addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && !fileInput.disabled) { e.preventDefault(); fileInput.click(); }
+});
 drop.addEventListener('dragover', e => { e.preventDefault(); if (!fileInput.disabled) drop.classList.add('hover'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('hover'));
 drop.addEventListener('drop', e => {
