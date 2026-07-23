@@ -196,3 +196,32 @@ def test_table_always_rendered_as_image(tmp_path):
     content = extract.extract_chapter_content(doc, chapter, repeated_texts=set(), seen_image_hashes=set())
 
     assert any(isinstance(item, ImageBlock) for item in content.items)
+
+
+def test_table_image_is_padded_and_rendered_at_higher_zoom(tmp_path):
+    """Regression test for a real bug: find_tables() can miss the table's
+    true edge outright (a whole last column, in one real book, not just a
+    few points) — a table image must be rendered padded beyond the raw
+    detected bbox, and at a high enough zoom to stay legible, not the bare
+    bbox at 2x."""
+    import io
+
+    from PIL import Image
+
+    pdf_path = tmp_path / "table.pdf"
+    _make_table_pdf(pdf_path)
+
+    doc = fitz.open(pdf_path)
+    chapter = Chapter(title="C1", start_page=0, end_page=1)
+    content = extract.extract_chapter_content(doc, chapter, repeated_texts=set(), seen_image_hashes=set())
+
+    table_images = [item for item in content.items if isinstance(item, ImageBlock)]
+    assert len(table_images) == 1
+    with Image.open(io.BytesIO(table_images[0].data)) as img:
+        width, height = img.size
+
+    # Raw table bbox is ~300x60 (two 150x30 cells per row, two rows). A bare
+    # 2x-zoom, zero-padding render would be exactly 600x120 — the fixed
+    # bug. Padded + rendered at TABLE_RENDER_ZOOM must come out larger.
+    assert width > 600
+    assert height > 120

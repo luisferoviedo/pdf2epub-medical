@@ -22,6 +22,14 @@ HEADER_FOOTER_MIN_OCCURRENCES = 3  # ...and at least this many times outright
 FULL_WIDTH_RATIO = 0.60  # blocks wider than this fraction of page count as "full width"
 COLUMN_GAP_RATIO = 0.08  # min horizontal gap (as fraction of page width) to split columns
 
+TABLE_RENDER_ZOOM = 3  # 2x (144dpi) was legible but soft for dense small-text data tables
+# find_tables() can miss the table's true edge outright — verified on a real book where it
+# dropped an entire last column (no border style it recognized) rather than just clipping a
+# few points. A fixed few-point pad doesn't fix that; padding proportional to the table's own
+# size does (confirmed empirically: ~20% recovered a full missing column in that case).
+TABLE_BBOX_PADDING_RATIO = 0.20
+TABLE_MAX_IMAGE_SIDE = 2400  # tables need to stay legible even at the cost of a bigger file
+
 _DIGIT_RUN_RE = re.compile(r"\d+")
 
 
@@ -33,7 +41,7 @@ def _normalize_repeat_key(text: str) -> str:
     return _DIGIT_RUN_RE.sub("#", text)
 
 
-def detect_repeated_texts(doc: fitz.Document, sample_every: int = 5) -> set[str]:
+def detect_repeated_texts(doc: fitz.Document, sample_every: int = 2) -> set[str]:
     """Finds text patterns that repeat near the top/bottom margin across
     sampled pages. Returns normalized keys (see _normalize_repeat_key) —
     callers must normalize candidate text the same way before checking
@@ -48,6 +56,13 @@ def detect_repeated_texts(doc: fitz.Document, sample_every: int = 5) -> set[str]
     same header/footer-zone position across multiple pages by coincidence,
     so a low bar here doesn't risk false positives the way it would for
     ordinary body paragraphs.
+
+    ``sample_every=2`` (not 5): a real book showed a *chapter*-level running
+    head (changes every ~15-20 pages, shorter-lived than a Part-level one)
+    landing right at the MIN_OCCURRENCES boundary with sparser sampling —
+    caught on some chapters and not others depending on where the sample
+    points happened to fall. Denser sampling costs more time but is cheap
+    relative to OCR/extraction, and reliability matters more here.
     """
     counts: Counter[str] = Counter()
     sampled = 0
@@ -162,8 +177,23 @@ def extract_chapter_content(
         # image, since a reader can't tell the numbers are wrong. Visual
         # fidelity beats "sometimes searchable, sometimes garbled".
         for table_bbox in table_bboxes:
-            pix = page.get_pixmap(clip=table_bbox, matrix=fitz.Matrix(2, 2))
-            data, mime = recompress(pix.tobytes("png"), max_side=max_image_size, jpeg_quality=jpeg_quality)
+            # find_tables() sometimes underestimates the table's true right/
+            # bottom edge (no visible border on the last column/row) and
+            # clips real content — pad the crop proportionally, then clamp
+            # back to the page.
+            pad_x = table_bbox.width * TABLE_BBOX_PADDING_RATIO
+            pad_y = table_bbox.height * TABLE_BBOX_PADDING_RATIO
+            padded_bbox = (
+                fitz.Rect(
+                    table_bbox.x0 - pad_x,
+                    table_bbox.y0 - pad_y,
+                    table_bbox.x1 + pad_x,
+                    table_bbox.y1 + pad_y,
+                )
+                & page.rect
+            )
+            pix = page.get_pixmap(clip=padded_bbox, matrix=fitz.Matrix(TABLE_RENDER_ZOOM, TABLE_RENDER_ZOOM))
+            data, mime = recompress(pix.tobytes("png"), max_side=TABLE_MAX_IMAGE_SIDE, jpeg_quality=jpeg_quality)
             h = content_hash(data)
             image_id = f"table_{page_index}_{h[:12]}"
             content.items.append(ImageBlock(data=data, mime=mime, image_id=image_id, caption=""))
