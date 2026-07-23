@@ -166,6 +166,45 @@ def test_page_image_rects_computed_once_per_page(tmp_path):
     assert n_images == 16
 
 
+def _make_diagram_pdf(path):
+    """A simple flowchart: boxes with short labels connected by lines, plus
+    a normal paragraph elsewhere on the page — mimics the real book's
+    "Fig. 2.2 Child health disparities" diagram that PyMuPDF's get_text()
+    returns as scattered, disconnected single-word/phrase text blocks with
+    no coherent reading order.
+    """
+    doc = fitz.open()
+    page = doc.new_page(width=600, height=800)
+    page.insert_text((50, 30), "Seccion normal", fontsize=14)
+    page.insert_textbox(
+        fitz.Rect(50, 60, 550, 150),
+        "Parrafo de texto normal que describe el contexto clinico relevante para esta seccion. " * 3,
+        fontsize=9,
+    )
+
+    # Staggered y-positions (not perfectly row-aligned) so PyMuPDF's own
+    # block-grouping doesn't merge two same-row labels into one text block —
+    # a real diagram's boxes are rarely pixel-aligned across separate
+    # elements either.
+    boxes = [
+        (60, 200, 200, 260, "Factor A"),
+        (250, 205, 390, 265, "Factor B"),
+        (60, 300, 200, 360, "Mecanismo"),
+        (250, 310, 390, 370, "Resultado"),
+        (440, 250, 560, 310, "Desenlace"),
+    ]
+    for x0, y0, x1, y1, label in boxes:
+        page.draw_rect(fitz.Rect(x0, y0, x1, y1))
+        page.insert_textbox(fitz.Rect(x0 + 5, y0 + 5, x1 - 5, y1 - 5), label, fontsize=9)
+    page.draw_line((200, 230), (250, 230))
+    page.draw_line((200, 330), (250, 330))
+    page.draw_line((390, 230), (440, 280))
+    page.draw_line((390, 330), (440, 280))
+
+    doc.save(path)
+    doc.close()
+
+
 def _make_table_pdf(path):
     doc = fitz.open()
     page = doc.new_page(width=600, height=800)
@@ -225,3 +264,29 @@ def test_table_image_is_padded_and_rendered_at_higher_zoom(tmp_path):
     # bug. Padded + rendered at TABLE_RENDER_ZOOM must come out larger.
     assert width > 600
     assert height > 120
+
+
+def test_diagram_flowchart_rendered_as_single_image(tmp_path):
+    """Regression test for a real bug found converting the actual Nelson
+    Textbook: a diagram (boxes + connector lines, native vector drawing, no
+    raster image) had each box's text label extracted as its own small,
+    disconnected block — the column/row reading-order heuristic (built for
+    paragraphs) scrambled them into nonsense. The whole diagram region must
+    render as one image instead, and a normal paragraph elsewhere on the
+    same page must still flow as ordinary text, not get swept into it."""
+    pdf_path = tmp_path / "diagram.pdf"
+    _make_diagram_pdf(pdf_path)
+
+    doc = fitz.open(pdf_path)
+    chapter = Chapter(title="C1", start_page=0, end_page=1)
+    content = extract.extract_chapter_content(doc, chapter, repeated_texts=set(), seen_image_hashes=set())
+
+    figure_images = [
+        item for item in content.items if isinstance(item, ImageBlock) and item.image_id.startswith("figure_")
+    ]
+    assert len(figure_images) == 1
+
+    texts = [item.text for item in content.items if isinstance(item, TextBlock)]
+    assert any("Parrafo de texto normal" in t for t in texts)
+    for label in ("Factor A", "Factor B", "Mecanismo", "Resultado", "Desenlace"):
+        assert not any(label in t for t in texts), f"{label!r} leaked out as scattered text instead of the figure image"

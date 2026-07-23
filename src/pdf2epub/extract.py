@@ -30,6 +30,21 @@ TABLE_RENDER_ZOOM = 3  # 2x (144dpi) was legible but soft for dense small-text d
 TABLE_BBOX_PADDING_RATIO = 0.20
 TABLE_MAX_IMAGE_SIDE = 2400  # tables need to stay legible even at the cost of a bigger file
 
+# A diagram/flowchart (boxes + connector lines, native vector drawing) has no
+# raster image to extract and isn't a table either — get_text() still returns
+# each box's text label as its own small block, and our column/row reading
+# order heuristic (built for paragraphs) scrambles them into nonsense. Render
+# the whole region as one image instead, like a table. Three independent
+# signals, all required, calibrated against a real book: a real diagram page
+# had 13 non-table drawing shapes covering 9% of the page with 16 short text
+# labels inside; ordinary pages (including ones already claimed by a table)
+# had at most 1 leftover shape after excluding table gridlines.
+FIGURE_MIN_DRAWING_COUNT = 4
+FIGURE_MIN_AREA_RATIO = 0.05
+FIGURE_MIN_TEXT_BLOCKS = 4
+FIGURE_MAX_LABEL_WORDS = 12  # a diagram label is short; a real paragraph inside the region isn't
+FIGURE_TABLE_OVERLAP_RATIO = 0.3  # drop drawings that are mostly a table's own gridlines
+
 _DIGIT_RUN_RE = re.compile(r"\d+")
 
 
@@ -141,6 +156,59 @@ def _overlaps(bbox_a: tuple[float, float, float, float], bbox_b: fitz.Rect, min_
     return (inter.get_area() / rect_a.get_area()) >= min_overlap if rect_a.get_area() else False
 
 
+def _detect_figure_bbox(page: fitz.Page, table_bboxes: list[fitz.Rect], text_blocks: list[dict]) -> fitz.Rect | None:
+    """Finds a likely diagram/flowchart region: several vector drawing shapes
+    (boxes, connector lines) clustered together, overlapping several short,
+    disconnected text labels — as opposed to a normal paragraph (long,
+    contiguous text) or an already-detected table (excluded via its own
+    gridline drawings). Returns the union bbox to render as one image, or
+    None if the page doesn't look like it has a diagram.
+    """
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        return None
+    if not drawings:
+        return None
+
+    rects: list[fitz.Rect] = []
+    for d in drawings:
+        raw_rect = d.get("rect")
+        if not raw_rect:
+            continue
+        rect = fitz.Rect(raw_rect)
+        if rect.get_area() <= 0:
+            continue
+        if any(_overlaps(tuple(rect), tb, min_overlap=FIGURE_TABLE_OVERLAP_RATIO) for tb in table_bboxes):
+            continue  # a table's own cell borders, not a separate diagram
+        rects.append(rect)
+
+    if len(rects) < FIGURE_MIN_DRAWING_COUNT:
+        return None
+
+    union = rects[0]
+    for r in rects[1:]:
+        union |= r
+
+    page_area = page.rect.width * page.rect.height
+    if page_area <= 0 or union.get_area() / page_area < FIGURE_MIN_AREA_RATIO:
+        return None
+
+    label_count = 0
+    for b in text_blocks:
+        bbox = fitz.Rect(b["bbox"])
+        if bbox.get_area() <= 0 or not _overlaps(tuple(bbox), union, min_overlap=0.5):
+            continue
+        text = "".join(span["text"] for line in b.get("lines", []) for span in line.get("spans", [])).strip()
+        if text and len(text.split()) <= FIGURE_MAX_LABEL_WORDS:
+            label_count += 1
+
+    if label_count < FIGURE_MIN_TEXT_BLOCKS:
+        return None
+
+    return union
+
+
 def extract_chapter_content(
     doc: fitz.Document,
     chapter: Chapter,
@@ -157,11 +225,17 @@ def extract_chapter_content(
         page = doc[page_index]
         page_width = page.rect.width
 
+        page_dict = page.get_text("dict")
+        blocks = page_dict.get("blocks", [])
+        text_blocks_raw = [b for b in blocks if b.get("type") == 0]
+        image_blocks_raw = [b for b in blocks if b.get("type") == 1]
+
         table_bboxes: list[fitz.Rect] = []
+        figure_bbox: fitz.Rect | None = None
         if page_index not in scanned_pages:
-            # A scanned page's "table" is just part of its one full-page raster
-            # image — there's no vector structure to find, and running the
-            # (expensive) table-structure heuristic against a page full of
+            # A scanned page's "table"/"figure" is just part of its one
+            # full-page raster image — there's no vector structure to find,
+            # and running these (expensive) heuristics against a page full of
             # small OCR word-boxes is pure cost for zero benefit.
             try:
                 found_tables = page.find_tables()
@@ -169,6 +243,7 @@ def extract_chapter_content(
                     table_bboxes.append(fitz.Rect(table.bbox))
             except Exception:
                 pass  # table detection is best-effort; never fail the whole page over it
+            figure_bbox = _detect_figure_bbox(page, table_bboxes, text_blocks_raw)
 
         # Always render as image, never as extracted HTML text: tried an ML
         # layout model for real selectable table text, but on complex
@@ -198,13 +273,38 @@ def extract_chapter_content(
             image_id = f"table_{page_index}_{h[:12]}"
             content.items.append(ImageBlock(data=data, mime=mime, image_id=image_id, caption=""))
 
-        page_dict = page.get_text("dict")
-        blocks = page_dict.get("blocks", [])
+        if figure_bbox is not None:
+            # A diagram/flowchart: native vector drawing (boxes + connector
+            # lines), no raster image to extract, and not a table either.
+            # Render the whole detected region as one image, same as tables.
+            pad_x = figure_bbox.width * TABLE_BBOX_PADDING_RATIO
+            pad_y = figure_bbox.height * TABLE_BBOX_PADDING_RATIO
+            padded_figure_bbox = (
+                fitz.Rect(
+                    figure_bbox.x0 - pad_x,
+                    figure_bbox.y0 - pad_y,
+                    figure_bbox.x1 + pad_x,
+                    figure_bbox.y1 + pad_y,
+                )
+                & page.rect
+            )
+            pix = page.get_pixmap(clip=padded_figure_bbox, matrix=fitz.Matrix(TABLE_RENDER_ZOOM, TABLE_RENDER_ZOOM))
+            data, mime = recompress(pix.tobytes("png"), max_side=TABLE_MAX_IMAGE_SIDE, jpeg_quality=jpeg_quality)
+            h = content_hash(data)
+            image_id = f"figure_{page_index}_{h[:12]}"
+            content.items.append(ImageBlock(data=data, mime=mime, image_id=image_id, caption=""))
 
-        text_blocks = [b for b in blocks if b.get("type") == 0]
-        image_blocks_raw = [b for b in blocks if b.get("type") == 1]
-
-        text_blocks = [b for b in text_blocks if not any(_overlaps(b["bbox"], tb) for tb in table_bboxes)]
+        text_blocks = [
+            b
+            for b in text_blocks_raw
+            if not any(_overlaps(b["bbox"], tb) for tb in table_bboxes)
+            and not (figure_bbox is not None and _overlaps(b["bbox"], figure_bbox))
+        ]
+        if figure_bbox is not None:
+            # Any raster sub-image inside the diagram (an icon, say) is
+            # already part of the whole-figure render — don't extract it a
+            # second time as its own separate image.
+            image_blocks_raw = [b for b in image_blocks_raw if not _overlaps(b["bbox"], figure_bbox)]
 
         ordered = _order_blocks(text_blocks + image_blocks_raw, page_width)
 
