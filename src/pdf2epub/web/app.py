@@ -41,10 +41,30 @@ def _run_job(
             _jobs[job_id]["current"] = current
             _jobs[job_id]["total"] = total
 
+    def on_stats(stats: dict[str, int]) -> None:
+        with _jobs_lock:
+            _jobs[job_id]["live_stats"] = dict(stats)
+
     try:
-        convert(input_path, output_path, options=options, on_progress=on_progress, cancel_event=cancel_event)
+        summary = convert(
+            input_path,
+            output_path,
+            options=options,
+            on_progress=on_progress,
+            on_stats=on_stats,
+            cancel_event=cancel_event,
+        )
         with _jobs_lock:
             _jobs[job_id]["status"] = "done"
+            _jobs[job_id]["summary"] = {
+                "pages": summary.pages,
+                "chapters": summary.chapters,
+                "tables": summary.tables,
+                "figures": summary.figures,
+                "images": summary.images,
+                "output_bytes": summary.output_bytes,
+                "elapsed_s": round(summary.elapsed_s, 1),
+            }
     except ConversionCancelled:
         with _jobs_lock:
             _jobs[job_id]["status"] = "cancelled"
@@ -104,6 +124,7 @@ async def create_job(
             "stage": "queued",
             "current": 0,
             "total": 0,
+            "live_stats": {"tables": 0, "figures": 0, "images": 0},
             "output_path": str(output_path),
             "filename": output_path.name,
         }

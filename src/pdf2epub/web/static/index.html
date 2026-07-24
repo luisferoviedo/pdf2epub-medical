@@ -17,27 +17,30 @@
     --stamp: #a8342a;
     --stamp-soft: #f3e2df;
   }
+  /* Dark mode is a candlelit reading room, not a generic slate dashboard:
+     warm near-black with a brown undertone (not cool blue-gray), parchment-
+     toned text, same red stamp accent nudged warmer for contrast. */
   @media (prefers-color-scheme: dark) {
     :root {
-      --paper: #1a1b1e;
-      --paper-raised: #232429;
-      --ink: #e7e4d8;
-      --ink-soft: #b3b0a2;
-      --ink-faint: #706e64;
-      --rule: #35363a;
-      --stamp: #d0564a;
-      --stamp-soft: #3a2422;
+      --paper: #1e1811;
+      --paper-raised: #2a2118;
+      --ink: #ecdfc2;
+      --ink-soft: #b7a683;
+      --ink-faint: #78684f;
+      --rule: #3d3222;
+      --stamp: #d97a5f;
+      --stamp-soft: #402a20;
     }
   }
   :root[data-theme="dark"] {
-    --paper: #1a1b1e;
-    --paper-raised: #232429;
-    --ink: #e7e4d8;
-    --ink-soft: #b3b0a2;
-    --ink-faint: #706e64;
-    --rule: #35363a;
-    --stamp: #d0564a;
-    --stamp-soft: #3a2422;
+    --paper: #1e1811;
+    --paper-raised: #2a2118;
+    --ink: #ecdfc2;
+    --ink-soft: #b7a683;
+    --ink-faint: #78684f;
+    --rule: #3d3222;
+    --stamp: #d97a5f;
+    --stamp-soft: #402a20;
   }
   :root[data-theme="light"] {
     --paper: #f6f5f0;
@@ -128,7 +131,7 @@
   }
   a.download {
     display: inline-block;
-    margin-top: 1rem;
+    margin-top: 0.9rem;
     font-family: "IBM Plex Mono", ui-monospace, monospace;
     font-size: 0.85rem;
     letter-spacing: 0.03em;
@@ -139,6 +142,52 @@
     border-radius: 3px;
   }
   a.download:hover { opacity: 0.9; }
+
+  #liveStats {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
+    color: var(--ink-faint);
+    margin-top: 0.4rem;
+  }
+
+  /* Result summary: a small catalog card, echoing the drop zone's dashed
+     border and the header stamp — real numbers from the finished book, not
+     just a bare download link. */
+  .result-card {
+    margin-top: 1rem;
+    border: 1.5px dashed var(--ink-faint);
+    border-radius: 4px;
+    padding: 1.1rem 1.2rem;
+  }
+  .result-stamp {
+    display: inline-block;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-weight: 600;
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--stamp);
+    border: 1.5px solid var(--stamp);
+    border-radius: 3px;
+    padding: 0.15rem 0.5rem;
+    transform: rotate(-1deg);
+    margin-bottom: 0.85rem;
+  }
+  .result-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 1rem;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    margin-bottom: 0.6rem;
+  }
+  .result-file {
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+    word-break: break-all;
+  }
 
   #error { color: var(--stamp); margin-top: 0.75rem; font-size: 0.9rem; }
   #error summary { cursor: pointer; font-size: 0.8rem; color: var(--ink-soft); margin-top: 0.4rem; }
@@ -216,6 +265,7 @@
       <span id="statusText"></span>
       <button class="cancel" id="cancelBtn">Cancelar</button>
     </div>
+    <div id="liveStats"></div>
     <div id="log"></div>
   </div>
 
@@ -232,6 +282,7 @@ const cancelBtn = document.getElementById('cancelBtn');
 const errorEl = document.getElementById('error');
 const resultEl = document.getElementById('result');
 const logEl = document.getElementById('log');
+const liveStatsEl = document.getElementById('liveStats');
 
 const JOB_KEY = 'pdf2epub_job_id';
 
@@ -254,6 +305,7 @@ const STAGE_INTRO = {
 
 let logState = { stage: null, lastMilestone: 0 };
 let currentJobId = null;
+let lastLoggedItemTotal = 0;
 
 function logLine(msg) {
   // msg can contain a user-supplied filename (e.g. from file.name) — build
@@ -291,6 +343,66 @@ function logProgress(stage, current, total) {
       logState.lastMilestone = current;
     }
   }
+}
+
+function updateLiveStats(stats) {
+  if (!stats) return;
+  const tables = stats.tables || 0, figures = stats.figures || 0, images = stats.images || 0;
+  const total = tables + figures + images;
+  liveStatsEl.textContent = total > 0 ? `${tables} tablas · ${figures} figuras · ${images} imágenes` : '';
+  if (total - lastLoggedItemTotal >= 5) {
+    logLine(`${tables} tablas, ${figures} figuras, ${images} imágenes encontradas hasta ahora`);
+    lastLoggedItemTotal = total;
+  }
+}
+
+function renderResultCard(jobId, job) {
+  const summary = job.summary || {};
+  const card = document.createElement('div');
+  card.className = 'result-card';
+
+  const stamp = document.createElement('div');
+  stamp.className = 'result-stamp';
+  stamp.textContent = 'Listo';
+  card.appendChild(stamp);
+
+  const meta = document.createElement('div');
+  meta.className = 'result-meta';
+  const parts = [
+    [summary.pages, 'páginas'],
+    [summary.chapters, 'capítulos'],
+    [summary.tables, 'tablas'],
+    [summary.figures, 'figuras'],
+    [summary.images, 'imágenes'],
+  ];
+  for (const [n, label] of parts) {
+    if (n === undefined) continue;
+    const span = document.createElement('span');
+    span.textContent = `${n} ${label}`;
+    meta.appendChild(span);
+  }
+  card.appendChild(meta);
+
+  const fileLine = document.createElement('div');
+  fileLine.className = 'result-file';
+  const sizeMb = summary.output_bytes ? (summary.output_bytes / 1024 / 1024).toFixed(1) : '?';
+  let timeStr = '';
+  if (summary.elapsed_s) {
+    const mins = Math.floor(summary.elapsed_s / 60);
+    const secs = Math.round(summary.elapsed_s % 60);
+    timeStr = mins > 0 ? ` — ${mins}m ${secs}s` : ` — ${secs}s`;
+  }
+  fileLine.textContent = `${job.filename || ''} — ${sizeMb} MB${timeStr}`;
+  card.appendChild(fileLine);
+
+  const link = document.createElement('a');
+  link.className = 'download';
+  link.href = `/jobs/${jobId}/download`;
+  link.textContent = 'Descargar EPUB';
+  card.appendChild(link);
+
+  resultEl.innerHTML = '';
+  resultEl.appendChild(card);
 }
 
 function notify(title, body) {
@@ -336,7 +448,9 @@ async function startJob(file) {
   errorEl.innerHTML = '';
   resultEl.innerHTML = '';
   logEl.innerHTML = '';
+  liveStatsEl.textContent = '';
   logState = { stage: null, lastMilestone: 0 };
+  lastLoggedItemTotal = 0;
   progressRow.style.display = 'block';
   progressEl.style.display = '';
   progressEl.removeAttribute('value');
@@ -431,14 +545,16 @@ async function poll(jobId) {
     statusEl.textContent = `${label} (${job.current}/${job.total || '?'})`;
   }
   logProgress(job.stage, job.current, job.total);
+  updateLiveStats(job.live_stats);
 
   if (job.status === 'done') {
     logLine('Listo. EPUB generado.');
     notify('pdf2epub: EPUB listo', job.filename || '');
     progressEl.style.display = 'none';
     cancelBtn.style.display = 'none';
+    liveStatsEl.textContent = '';
     statusEl.textContent = 'Completado.';
-    resultEl.innerHTML = `<a class="download" href="/jobs/${jobId}/download">Descargar EPUB</a>`;
+    renderResultCard(jobId, job);
     setFormDisabled(false);
     localStorage.removeItem(JOB_KEY);
     return;

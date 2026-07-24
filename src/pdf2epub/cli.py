@@ -73,9 +73,14 @@ def convert_cmd(
             detail = f"{current}s" if stage == "ocr" else f"{current}/{total}"
             progress.update(task_id, description=label, completed=current, total=total or None, detail=detail)
 
-        convert(input_pdf, output_path, options=options, on_progress=on_progress)
+        summary = convert(input_pdf, output_path, options=options, on_progress=on_progress)
 
-    console.print(f"[bold green]Listo:[/bold green] {output_path}")
+    size_mb = summary.output_bytes / 1024 / 1024
+    console.print(f"[bold green]Listo:[/bold green] {output_path} ({size_mb:.1f} MB, {summary.elapsed_s:.0f}s)")
+    console.print(
+        f"  {summary.pages} páginas · {summary.chapters} capítulos · "
+        f"{summary.tables} tablas · {summary.figures} figuras · {summary.images} imágenes"
+    )
 
 
 @app.command()

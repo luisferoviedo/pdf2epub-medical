@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -30,14 +31,36 @@ from pdf2epub import extract, ocr, outline
 from pdf2epub.epub import build_epub
 from pdf2epub.errors import ConversionCancelled
 from pdf2epub.images import recompress
-from pdf2epub.models import Chapter, ChapterContent
+from pdf2epub.models import Chapter, ChapterContent, ImageBlock
 
 ProgressCallback = Callable[[str, int, int], None]
+StatsCallback = Callable[[dict[str, int]], None]
 
 # Below this fraction of scanned pages, OCR won't dominate total wall-clock
 # time, so parallel extraction's ~2x is worth the process-pool overhead.
 PARALLEL_SCANNED_RATIO_THRESHOLD = 0.10
 MIN_CHAPTERS_FOR_PARALLEL = 2
+
+
+def _noop_stats(stats: dict[str, int]) -> None:
+    pass
+
+
+def _tally(content: ChapterContent, running: dict[str, int]) -> dict[str, int]:
+    """Adds one chapter's image counts (by kind) into a running total dict,
+    keyed the same as ConversionSummary's fields, and returns it — called as
+    each chapter finishes so the caller can report live progress, not just a
+    final count after the whole book is done."""
+    for item in content.items:
+        if not isinstance(item, ImageBlock):
+            continue
+        if item.image_id.startswith("table_"):
+            running["tables"] += 1
+        elif item.image_id.startswith("figure_"):
+            running["figures"] += 1
+        else:
+            running["images"] += 1
+    return running
 
 
 @dataclass
@@ -50,6 +73,21 @@ class ConvertOptions:
     cover_path: Path | None = None
     title: str | None = None
     author: str | None = None
+
+
+@dataclass
+class ConversionSummary:
+    """Real counts from a finished conversion, for surfacing to the user
+    (CLI printout, web GUI result card) instead of just a bare download
+    link — what actually happened, not just that it succeeded."""
+
+    pages: int
+    chapters: int
+    tables: int
+    figures: int
+    images: int
+    output_bytes: int
+    elapsed_s: float
 
 
 def _noop_progress(stage: str, current: int, total: int) -> None:
@@ -94,10 +132,12 @@ def _extract_sequential(
     options: ConvertOptions,
     on_progress: ProgressCallback,
     check_cancelled: Callable[[], None],
+    on_stats: StatsCallback = _noop_stats,
 ) -> list[ChapterContent]:
     total_pages = doc.page_count
     seen_image_hashes: set[str] = set()
     chapter_contents: list[ChapterContent] = []
+    running_stats = {"tables": 0, "figures": 0, "images": 0}
     for chapter in chapters:
         check_cancelled()
         content = extract.extract_chapter_content(
@@ -111,6 +151,7 @@ def _extract_sequential(
         )
         chapter_contents.append(content)
         on_progress("extract", chapter.end_page, total_pages)
+        on_stats(_tally(content, running_stats))
     return chapter_contents
 
 
@@ -123,6 +164,7 @@ def _extract_parallel(
     options: ConvertOptions,
     on_progress: ProgressCallback,
     check_cancelled: Callable[[], None],
+    on_stats: StatsCallback = _noop_stats,
 ) -> list[ChapterContent]:
     check_cancelled()  # last clean checkpoint: once submitted, workers run to completion
     args = [
@@ -131,6 +173,7 @@ def _extract_parallel(
     ]
     results: dict[int, ChapterContent] = {}
     pages_done = 0
+    running_stats = {"tables": 0, "figures": 0, "images": 0}
     with ProcessPoolExecutor() as pool:
         futures = {pool.submit(_extract_chapter_worker, a): i for i, a in enumerate(args)}
         for future in as_completed(futures):
@@ -139,6 +182,7 @@ def _extract_parallel(
             results[i] = content
             pages_done += chapters[i].end_page - chapters[i].start_page
             on_progress("extract_parallel", pages_done, total_pages)
+            on_stats(_tally(content, running_stats))
     return [results[i] for i in range(len(chapters))]
 
 
@@ -147,9 +191,11 @@ def convert(
     output_path: Path,
     options: ConvertOptions | None = None,
     on_progress: ProgressCallback = _noop_progress,
+    on_stats: StatsCallback = _noop_stats,
     cancel_event: threading.Event | None = None,
-) -> None:
+) -> ConversionSummary:
     options = options or ConvertOptions()
+    start_time = time.monotonic()
 
     def check_cancelled() -> None:
         if cancel_event is not None and cancel_event.is_set():
@@ -198,10 +244,11 @@ def convert(
                     options,
                     on_progress,
                     check_cancelled,
+                    on_stats,
                 )
             else:
                 chapter_contents = _extract_sequential(
-                    doc, chapters, repeated_texts, scanned_pages, options, on_progress, check_cancelled
+                    doc, chapters, repeated_texts, scanned_pages, options, on_progress, check_cancelled, on_stats
                 )
 
             check_cancelled()
@@ -221,6 +268,20 @@ def convert(
                 cover_bytes=cover_bytes,
             )
             on_progress("build_epub", 1, 1)
+
+            final_stats = {"tables": 0, "figures": 0, "images": 0}
+            for chapter_content in chapter_contents:
+                _tally(chapter_content, final_stats)
+
+            return ConversionSummary(
+                pages=total_pages,
+                chapters=len(chapters),
+                tables=final_stats["tables"],
+                figures=final_stats["figures"],
+                images=final_stats["images"],
+                output_bytes=output_path.stat().st_size,
+                elapsed_s=time.monotonic() - start_time,
+            )
         finally:
             if doc is not None:
                 doc.close()
